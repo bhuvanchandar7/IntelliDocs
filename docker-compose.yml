@@ -1,0 +1,17 @@
+version: '3.9'
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    volumes:
+      - ./data/chroma_db:/chroma/chroma
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+    networks:
+      - intellidocs-net
+
+networks:
+  intellidocs-net:
+    driver: bridge

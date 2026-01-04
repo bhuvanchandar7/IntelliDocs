@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# VS Code
+.vscode/
+
+# Mac
+.DS_Store
+
+# Data
+data/raw_pdfs/
+data/chroma_db/
+!data/.gitkeep
+
+# Env
+.env
+
+# Logs
+test_output.txt
+test_results.txt
+test_results_clean.txt
