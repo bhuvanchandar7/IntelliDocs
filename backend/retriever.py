@@ -13,9 +13,7 @@ def get_vector_retriever(k=5):
     vectorstore = Chroma(
         collection_name="intellidocs_papers",
         embedding_function=embeddings,
-        client_settings=Settings(allow_reset=True, anonymized_telemetry=False),
-        host="localhost",
-        port=8000
+        persist_directory="data/chroma_db"
     )
     
     return vectorstore.as_retriever(search_kwargs={"k": k})

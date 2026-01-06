@@ -66,9 +66,7 @@ def process_pdfs(input_dir="data/raw_pdfs", chunk_size=512, chunk_overlap=50):
         vectorstore = Chroma(
             collection_name="intellidocs_papers",
             embedding_function=embeddings,
-            client_settings=Settings(allow_reset=True, anonymized_telemetry=False),
-            host="localhost",
-            port=8000
+            persist_directory="data/chroma_db"
         )
         
         # Add documents in batches to avoid hitting limits or memory issues

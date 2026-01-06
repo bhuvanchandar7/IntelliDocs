@@ -1,0 +1,28 @@
+/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+Initializing Vector Retriever...
+Traceback (most recent call last):
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/langchain_community/embeddings/huggingface.py", line 57, in __init__
+    import sentence_transformers
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/sentence_transformers/__init__.py", line 3, in <module>
+    from .datasets import SentencesDataset, ParallelSentencesDataset
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/sentence_transformers/datasets/__init__.py", line 3, in <module>
+    from .ParallelSentencesDataset import ParallelSentencesDataset
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/sentence_transformers/datasets/ParallelSentencesDataset.py", line 4, in <module>
+    from .. import SentenceTransformer
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/sentence_transformers/SentenceTransformer.py", line 12, in <module>
+    from huggingface_hub import HfApi, HfFolder, Repository, hf_hub_url, cached_download
+ImportError: cannot import name 'cached_download' from 'huggingface_hub' (/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/huggingface_hub/__init__.py)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/test_retrieval.py", line 22, in <module>
+    test_retrieval()
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/test_retrieval.py", line 6, in test_retrieval
+    retriever = get_vector_retriever(k=3)
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/backend/retriever.py", line 11, in get_vector_retriever
+    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
+  File "/Users/bhuvan/Desktop/Important doc/IntelliDocs/.venv/lib/python3.9/site-packages/langchain_community/embeddings/huggingface.py", line 60, in __init__
+    raise ImportError(
+ImportError: Could not import sentence_transformers python package. Please install it with `pip install sentence-transformers`.

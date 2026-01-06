@@ -38,7 +38,12 @@ data/chroma_db/
 # Env
 .env
 
+
 # Logs
-test_output.txt
-test_results.txt
-test_results_clean.txt
+*.log
+npm-debug.log*
+
+# Frontend
+node_modules/
+dist/
+.DS_Store
