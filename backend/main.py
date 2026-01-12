@@ -98,12 +98,46 @@ def query_documents(request: QueryRequest):
         print(f"Querying: {request.query}")
         docs = retriever.get_relevant_documents(request.query)
         
-        # 2. Generate Answer (Mock for now)
-        generated_answer = "Based on the retrieved documents:\n\n"
-        for i, doc in enumerate(docs):
-            generated_answer += f"- {doc.page_content[:200]}...\n"
+        # 2. Generate Answer with Local LLM
+        print("Starting LLM Generation...")
         
-        generated_answer += "\n(Note: LLM Generation is the next component to integrate)"
+        # Prepare Context
+        context_text = "\n\n".join([doc.page_content for doc in docs])
+        
+        # Initializing LLM logic inside the request to handle model loading checks
+        # In production, this should be global, but we need to check if model exists first
+        model_path = "data/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+        
+        if not os.path.exists(model_path):
+             generated_answer = "Error: Model file not found. It might still be downloading. Please wait."
+        else:
+            # Lazy Import and Load (Global var would be better)
+            from langchain_community.llms import LlamaCpp
+            from langchain.callbacks.manager import CallbackManager
+            from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+
+            # Check if global 'llm' exists (hacky singleton for this function scope)
+            # A better pattern is to load it at startup, but the file might not exist yet.
+            if not hasattr(app.state, "llm"):
+                print("Loading LLM model into memory...")
+                callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
+                app.state.llm = LlamaCpp(
+                    model_path=model_path,
+                    n_gpu_layers=-1, # Offload all to Metal/GPU
+                    n_batch=512,
+                    n_ctx=4096, # Context window
+                    f16_kv=True,  # MUST set to True for Metal!
+                    callback_manager=callback_manager,
+                    verbose=True,
+                    temperature=0.7,
+                )
+            
+            # Mistral Instruct Prompt Format
+            prompt = f"<s>[INST] You are a helpful assistant. Answer the question based strictly on the context below.\n\nContext:\n{context_text}\n\nQuestion: {request.query} [/INST]"
+            
+            # Generate
+            # Using invoke for synchronous wait, stream is better for UX but requires event stream
+            generated_answer = app.state.llm.invoke(prompt)
 
         # 3. Format Response
         sources = [
