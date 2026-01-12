@@ -25,6 +25,7 @@ class MetricsResponse(BaseModel):
     total_requests: int
     average_latency_ms: float
     vector_db_status: str
+    request_history: List[int] = [] # Last 60 minutes histogram
 
 class DocumentInfo(BaseModel):
     id: str

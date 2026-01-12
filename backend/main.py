@@ -27,7 +27,8 @@ retriever = get_vector_retriever(k=3)
 # Global Stats Tracker
 stats = {
     "total_requests": 0,
-    "total_latency_ms": 0.0
+    "total_latency_ms": 0.0,
+    "timestamps": [] # List of time.time()
 }
 
 @app.get("/metrics", response_model=MetricsResponse)
@@ -39,12 +40,27 @@ def get_metrics():
         avg_latency = 0.0
         if stats["total_requests"] > 0:
             avg_latency = stats["total_latency_ms"] / stats["total_requests"]
+        
+        # Calculate Request History (Last 60 mins, grouped by minute)
+        now = time.time()
+        one_hour_ago = now - 3600
+        
+        # Filter old timestamps
+        stats["timestamps"] = [ts for ts in stats["timestamps"] if ts > one_hour_ago]
+        
+        # Create bins (60 minutes)
+        history = [0] * 60
+        for ts in stats["timestamps"]:
+            minute_idx = int((ts - one_hour_ago) / 60)
+            if 0 <= minute_idx < 60:
+                history[minute_idx] += 1
             
         return MetricsResponse(
             document_count=count,
             total_requests=stats["total_requests"],
             average_latency_ms=round(avg_latency, 2),
-            vector_db_status="Healthy"
+            vector_db_status="Healthy",
+            request_history=history
         )
     except Exception as e:
         # Fallback if Chroma fails
@@ -52,7 +68,8 @@ def get_metrics():
             document_count=0,
             total_requests=stats["total_requests"],
             average_latency_ms=0.0,
-            vector_db_status=f"Error: {str(e)}"
+            vector_db_status=f"Error: {str(e)}",
+            request_history=[0]*60
         )
 
 @app.get("/documents", response_model=DocumentListResponse)
@@ -93,6 +110,7 @@ def query_documents(request: QueryRequest):
         
         # Update Stats
         stats["total_requests"] += 1
+        stats["timestamps"].append(time.time())
         
         # 1. Retrieve Documents
         print(f"Querying: {request.query}")

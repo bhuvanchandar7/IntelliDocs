@@ -29,8 +29,10 @@ export default function Monitoring() {
         { title: "Total Requests", value: metrics.total_requests, icon: Server, trend: "Global", color: "text-orange-500" },
     ];
 
-    // Mock data for the chart visualization
-    const chartData = [40, 65, 30, 80, 55, 90, 45, 70, 35, 60, 25, 50, 75, 40, 65, 55, 85, 45];
+    // Use real history or fallback to zeros if empty (initially)
+    const history = metrics.request_history || new Array(60).fill(0);
+    // Determine max value for scaling bar height (prevent flat line if max is 0)
+    const maxVal = Math.max(...history, 5); 
 
     return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -62,15 +64,15 @@ export default function Monitoring() {
             {/* Latency Chart Visualization */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 shadow-sm">
                 <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-6">Request Volume (Last Hour)</h3>
-                <div className="flex items-end justify-between h-48 gap-2">
-                    {chartData.map((height, i) => (
+                <div className="flex items-end justify-between h-48 gap-1">
+                    {history.map((val, i) => (
                         <div
                             key={i}
-                            className="flex-1 bg-primary/20 hover:bg-primary/40 transition-colors rounded-t-sm relative group"
-                            style={{ height: `${height}%` }}
+                            className="flex-1 bg-primary/20 hover:bg-primary/60 transition-colors rounded-t-sm relative group"
+                            style={{ height: `${(val / maxVal) * 100}%` }}
                         >
-                            <div className="opacity-0 group-hover:opacity-100 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-xs py-1 px-2 rounded pointer-events-none">
-                                {height} reqs
+                            <div className="opacity-0 group-hover:opacity-100 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-xs py-1 px-2 rounded pointer-events-none whitespace-nowrap z-10">
+                                {val} reqs
                             </div>
                         </div>
                     ))}
