@@ -62,7 +62,6 @@ def process_pdfs(input_dir="data/raw_pdfs", chunk_size=512, chunk_overlap=50):
         embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
         
         # Initialize Vector Store (Chroma)
-        # We use the HTTP client to connect to the docker container
         vectorstore = Chroma(
             collection_name="intellidocs_papers",
             embedding_function=embeddings,
@@ -77,6 +76,48 @@ def process_pdfs(input_dir="data/raw_pdfs", chunk_size=512, chunk_overlap=50):
             vectorstore.add_documents(documents=batch)
             
         print("✓ Successfully ingested all chunks into ChromaDB.")
+
+def ingest_single_file(file_path, vectorstore=None):
+    """
+    Ingests a single PDF file into ChromaDB (for API usage).
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File {file_path} not found.")
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=512,
+        chunk_overlap=50,
+        separators=["\n\n", "\n", " ", ""]
+    )
+
+    try:
+        raw_text = extract_text_from_pdf(file_path)
+        chunks = text_splitter.split_text(raw_text)
+        
+        # Use filename as source
+        filename = os.path.basename(file_path)
+        docs = [Document(page_content=chunk, metadata={"source": filename}) for chunk in chunks]
+        
+        if docs:
+            # Use provided vectorstore or create new one (fallback for script usage)
+            if vectorstore is None:
+                model_kwargs = {'device': 'mps'} 
+                embeddings = HuggingFaceEmbeddings(
+                    model_name="BAAI/bge-base-en-v1.5",
+                    model_kwargs=model_kwargs
+                )
+                vectorstore = Chroma(
+                    collection_name="intellidocs_papers",
+                    embedding_function=embeddings,
+                    persist_directory="data/chroma_db"
+                )
+            
+            vectorstore.add_documents(documents=docs)
+            return len(docs)
+        return 0
+    except Exception as e:
+        print(f"Error ingesting {file_path}: {e}")
+        raise e
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process PDFs and chunk text.")

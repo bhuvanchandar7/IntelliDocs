@@ -19,3 +19,18 @@ class QueryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     message: str
+
+class MetricsResponse(BaseModel):
+    document_count: int
+    total_requests: int
+    average_latency_ms: float
+    vector_db_status: str
+
+class DocumentInfo(BaseModel):
+    id: str
+    source: str
+    page_content: str  # Preview
+    metadata: dict
+
+class DocumentListResponse(BaseModel):
+    documents: List[DocumentInfo]
