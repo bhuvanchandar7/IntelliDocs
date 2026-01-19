@@ -34,28 +34,67 @@ function Chat() {
         setInput("");
         setIsLoading(true);
 
-        try {
-            const response = await api.query(userMessage.content);
+        let botMessageId = null;
 
-            const botMessage = {
-                id: Date.now() + 1,
-                role: 'assistant',
-                content: response.answer,
-                sources: response.sources
-            };
-
-            setMessages(prev => [...prev, botMessage]);
-        } catch (error) {
-            console.error("Error:", error);
-            const errorMessage = {
-                id: Date.now() + 1,
-                role: 'assistant',
-                content: "Sorry, I encountered an error while processing your request."
-            };
-            setMessages(prev => [...prev, errorMessage]);
-        } finally {
-            setIsLoading(false);
-        }
+        await api.queryStream(
+            userMessage.content,
+            (token) => {
+                if (!botMessageId) {
+                    setIsLoading(false);
+                    botMessageId = Date.now();
+                    setMessages(prev => [...prev, {
+                        id: botMessageId,
+                        role: 'assistant',
+                        content: token,
+                        sources: []
+                    }]);
+                } else {
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === botMessageId
+                            ? { ...msg, content: msg.content + token }
+                            : msg
+                    ));
+                }
+            },
+            (sources) => {
+                if (!botMessageId) {
+                    setIsLoading(false);
+                    botMessageId = Date.now();
+                    setMessages(prev => [...prev, {
+                        id: botMessageId,
+                        role: 'assistant',
+                        content: "",
+                        sources: sources
+                    }]);
+                } else {
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === botMessageId
+                            ? { ...msg, sources: sources }
+                            : msg
+                    ));
+                }
+            },
+            () => {
+                setIsLoading(false);
+            },
+            (error) => {
+                console.error("Stream error:", error);
+                setIsLoading(false);
+                if (botMessageId) {
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === botMessageId
+                            ? { ...msg, content: msg.content + "\n[Error: Connection interrupted]" }
+                            : msg
+                    ));
+                } else {
+                    setMessages(prev => [...prev, {
+                        id: Date.now(),
+                        role: 'assistant',
+                        content: "Sorry, I encountered an error while processing your request."
+                    }]);
+                }
+            }
+        );
     };
 
     return (
@@ -165,7 +204,7 @@ function Chat() {
                         </button>
                     </form>
                     <p className="text-center text-xs text-slate-400 mt-2">
-                        AI can make mistakes. Verify important information.
+                        AI can make mistakes. Verify important information. (v1.1)
                     </p>
                 </div>
             </div>

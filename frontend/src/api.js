@@ -72,5 +72,55 @@ export const api = {
             console.error("Delete failed:", error);
             throw error;
         }
+    },
+
+    // Streaming Query
+    queryStream: async (query, onToken, onSources, onDone, onError) => {
+        try {
+            const response = await fetch(`${API_URL}/query`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ query }),
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || response.statusText);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let buffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+
+                buffer = lines.pop(); // Keep incomplete line
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const message = JSON.parse(line);
+                        if (message.type === "sources") {
+                            if (onSources) onSources(message.data);
+                        } else if (message.type === "token") {
+                            if (onToken) onToken(message.data);
+                        } else if (message.type === "done") {
+                            if (onDone) onDone(message);
+                        }
+                    } catch (e) {
+                        console.error("Error parsing stream line:", e, line);
+                    }
+                }
+            }
+        } catch (error) {
+            if (onError) onError(error);
+        }
     }
 };

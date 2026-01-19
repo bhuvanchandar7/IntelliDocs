@@ -1,54 +1,127 @@
 import time
 import os
 import shutil
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from backend.schemas import QueryRequest, QueryResponse, DocumentSource, HealthResponse, MetricsResponse, DocumentListResponse, DocumentInfo
-from backend.retriever import get_vector_retriever
+from backend.retriever import get_vector_retriever, get_bm25_retriever, Reranker
+from langchain.retrievers import EnsembleRetriever
+from langchain.docstore.document import Document
 from ingestion.process_pdfs import ingest_single_file
 
-app = FastAPI(title="IntelliDocs API", version="0.1.0")
+from contextlib import asynccontextmanager
+from fastapi.responses import StreamingResponse
+import json
 
-# CORS (Allow Frontend to connect)
+# Global Components
+vector_retriever = None
+vectorstore = None
+bm25_retriever = None
+reranker = None
+ensemble_retriever = None
+
+# Lifespan manager to handle startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global vector_retriever, vectorstore, bm25_retriever, reranker, ensemble_retriever
+    
+    print("Initializing Application...")
+    
+    # 1. Initialize Vector Store & Retriever
+    print("Initializing Vector Retriever...")
+    vector_retriever, vectorstore = get_vector_retriever(k=10) # Fetch more candidates
+    
+    # 2. Initialize BM25 (Requires fetching all docs)
+    print("Building BM25 Index (Hybrid Search)...")
+    try:
+        # Fetch all docs from Chroma
+        data = vectorstore.get() 
+        all_docs = []
+        if data['documents']:
+             for i, text in enumerate(data['documents']):
+                  meta = data['metadatas'][i] if data['metadatas'] else {}
+                  all_docs.append(Document(page_content=text, metadata=meta))
+        
+        if all_docs:
+            bm25_retriever = get_bm25_retriever(all_docs, k=10)
+            print(f"BM25 Index built with {len(all_docs)} documents.")
+            
+            # Create Ensemble Retriever
+            ensemble_retriever = EnsembleRetriever(
+                retrievers=[bm25_retriever, vector_retriever],
+                weights=[0.5, 0.5] # Equal weight
+            )
+        else:
+            print("Warning: No documents found. BM25 skipped.")
+            ensemble_retriever = vector_retriever # Fallback
+            
+    except Exception as e:
+        print(f"Error building BM25: {e}")
+        ensemble_retriever = vector_retriever # Fallback
+
+    # 3. Initialize Reranker
+    print("Loading Reranker Model...")
+    reranker = Reranker()
+
+    # 4. Load LLM
+    model_path = "data/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+    if os.path.exists(model_path):
+        print("Loading LLM model into memory...")
+        from langchain_community.llms import LlamaCpp
+        from langchain.callbacks.manager import CallbackManager
+        from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+
+        callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
+        app.state.llm = LlamaCpp(
+            model_path=model_path,
+            n_gpu_layers=-1,
+            n_batch=512,
+            n_ctx=4096,
+            f16_kv=True,
+            callback_manager=callback_manager,
+            verbose=True,
+            temperature=0.7,
+        )
+        print("LLM Loaded Successfully.")
+    else:
+        print("Warning: LLM model not found. Queries will fail.")
+        app.state.llm = None
+    
+    yield
+    
+    print("Shutting down...")
+
+app = FastAPI(title="IntelliDocs API", version="0.1.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify the React app URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global Retriever (Lazy loading could be better but this is simple)
-# Note: For efficient Hybrid Search we need to keep the BM25 index in memory.
-# For now, we'll default to Vector Search (Chroma) which is persistent and efficient.
-retriever = get_vector_retriever(k=3)
-
-
 # Global Stats Tracker
 stats = {
     "total_requests": 0,
     "total_latency_ms": 0.0,
-    "timestamps": [] # List of time.time()
+    "timestamps": [] 
 }
 
 @app.get("/metrics", response_model=MetricsResponse)
 def get_metrics():
     try:
-        # Get count from Chroma
-        count = retriever.vectorstore._collection.count()
+        # Get count
+        count = vectorstore._collection.count() if vectorstore else 0
         
         avg_latency = 0.0
         if stats["total_requests"] > 0:
             avg_latency = stats["total_latency_ms"] / stats["total_requests"]
         
-        # Calculate Request History (Last 60 mins, grouped by minute)
+        # Calculate Request History
         now = time.time()
         one_hour_ago = now - 3600
-        
-        # Filter old timestamps
         stats["timestamps"] = [ts for ts in stats["timestamps"] if ts > one_hour_ago]
-        
-        # Create bins (60 minutes)
         history = [0] * 60
         for ts in stats["timestamps"]:
             minute_idx = int((ts - one_hour_ago) / 60)
@@ -63,7 +136,6 @@ def get_metrics():
             request_history=history
         )
     except Exception as e:
-        # Fallback if Chroma fails
         return MetricsResponse(
             document_count=0,
             total_requests=stats["total_requests"],
@@ -74,26 +146,19 @@ def get_metrics():
 
 @app.get("/documents", response_model=DocumentListResponse)
 def list_documents():
-    # Fetch ALL documents (limit=None doesn't always work as expected in some chroma versions, setting high number)
-    data = retriever.vectorstore.get(limit=10000, include=["metadatas"])
-    
+    if not vectorstore:
+         raise HTTPException(status_code=503, detail="Vectorstore not initialized")
+         
+    data = vectorstore.get(limit=10000, include=["metadatas"])
     docs = []
     ids = data["ids"]
     metadatas = data["metadatas"]
-    # documents = data["documents"] # Not fetching content anymore
     
-    # Debug logging
-    unique_sources = set()
-    for m in metadatas:
-        if m and "source" in m:
-            unique_sources.add(m["source"])
-    print(f"DEBUG: list_documents found {len(ids)} chunks from sources: {unique_sources}")
-
     for i, doc_id in enumerate(ids):
         docs.append(DocumentInfo(
             id=doc_id,
             source=metadatas[i].get("source", "Unknown"),
-            page_content="", # Preview not needed for list view, saves bandwidth
+            page_content="",
             metadata=metadatas[i] or {}
         ))
     
@@ -103,110 +168,85 @@ def list_documents():
 def health_check():
     return HealthResponse(status="ok", message="IntelliDocs API is running")
 
-@app.post("/query", response_model=QueryResponse)
-def query_documents(request: QueryRequest):
+@app.post("/query") 
+async def query_documents(request: QueryRequest):
     try:
         start_time = time.time()
-        
-        # Update Stats
         stats["total_requests"] += 1
         stats["timestamps"].append(time.time())
         
-        # 1. Retrieve Documents
         print(f"Querying: {request.query}")
-        docs = retriever.get_relevant_documents(request.query)
         
-        # 2. Generate Answer with Local LLM
-        print("Starting LLM Generation...")
+        # 1. Retrieval (Hybrid)
+        # Fetch top 10 candidates
+        candidates = ensemble_retriever.invoke(request.query)
+        print(f"Retrieved {len(candidates)} candidates.")
         
+        # 2. Reranking
+        # Filter top 5
+        docs = reranker.rerank(request.query, candidates, top_k=5)
+        print(f"After Reranking: Keeping {len(docs)} best docs.")
+
         # Prepare Context
         context_text = "\n\n".join([doc.page_content for doc in docs])
         
-        # Initializing LLM logic inside the request to handle model loading checks
-        # In production, this should be global, but we need to check if model exists first
-        model_path = "data/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
-        
-        if not os.path.exists(model_path):
-             generated_answer = "Error: Model file not found. It might still be downloading. Please wait."
-        else:
-            # Lazy Import and Load (Global var would be better)
-            from langchain_community.llms import LlamaCpp
-            from langchain.callbacks.manager import CallbackManager
-            from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-
-            # Check if global 'llm' exists (hacky singleton for this function scope)
-            # A better pattern is to load it at startup, but the file might not exist yet.
-            if not hasattr(app.state, "llm"):
-                print("Loading LLM model into memory...")
-                callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
-                app.state.llm = LlamaCpp(
-                    model_path=model_path,
-                    n_gpu_layers=-1, # Offload all to Metal/GPU
-                    n_batch=512,
-                    n_ctx=4096, # Context window
-                    f16_kv=True,  # MUST set to True for Metal!
-                    callback_manager=callback_manager,
-                    verbose=True,
-                    temperature=0.7,
-                )
+        if not hasattr(app.state, "llm") or app.state.llm is None:
+             raise HTTPException(status_code=503, detail="LLM model is not loaded.")
             
-            # Mistral Instruct Prompt Format
-            prompt = f"<s>[INST] You are a helpful assistant. Answer the question based strictly on the context below.\n\nContext:\n{context_text}\n\nQuestion: {request.query} [/INST]"
+        prompt = f"<s>[INST] You are a helpful assistant. Answer the question based strictly on the context below.\n\nContext:\n{context_text}\n\nQuestion: {request.query} [/INST]"
+        
+        async def generate_stream():
+            sources = [
+                {
+                    "content": doc.page_content,
+                    "source": doc.metadata.get("source", "unknown"),
+                    # Score might be useful for debug but user doesn't need it
+                    "score": doc.metadata.get("score", 0.0)
+                } for doc in docs
+            ]
             
-            # Generate
-            # Using invoke for synchronous wait, stream is better for UX but requires event stream
-            generated_answer = app.state.llm.invoke(prompt)
+            yield json.dumps({"type": "sources", "data": sources}) + "\n"
+            
+            for chunk in app.state.llm.stream(prompt):
+                 if chunk:
+                    yield json.dumps({"type": "token", "data": chunk}) + "\n"
+            
+            process_time = (time.time() - start_time) * 1000
+            stats["total_latency_ms"] += process_time
+            yield json.dumps({"type": "done", "latency_ms": process_time}) + "\n"
 
-        # 3. Format Response
-        sources = [
-            DocumentSource(
-                content=doc.page_content,
-                source=doc.metadata.get("source", "unknown"),
-                score=0.0
-            ) for doc in docs
-        ]
-        
-        process_time = (time.time() - start_time) * 1000
-        stats["total_latency_ms"] += process_time
-        
-        return QueryResponse(
-            answer=generated_answer,
-            sources=sources,
-            query_time_ms=process_time
-        )
+        return StreamingResponse(generate_stream(), media_type="application/x-ndjson")
 
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Wrapper for background task to handle errors logs
-def background_ingest(file_path, vectorstore):
+def background_ingest(file_path, vectorstore_arg): # vectorstore_arg ignored, using global
     try:
         print(f"Starting background ingestion for {file_path}...")
+        # Ignore vectorstore_arg, use global variable
         count = ingest_single_file(file_path, vectorstore)
+        
+        # TODO: Update BM25 index? 
+        # For now, it won't update until restart. That's a trade-off.
+        
         print(f"Background ingestion complete. {count} chunks added.")
     except Exception as e:
         print(f"Background ingestion failed for {file_path}: {e}")
 
-from fastapi import BackgroundTasks
-
 @app.post("/upload")
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     try:
-        # Ensure data directory exists
         save_dir = "data/raw_pdfs"
         os.makedirs(save_dir, exist_ok=True)
-        
         file_path = os.path.join(save_dir, file.filename)
         
-        # Save file to disk
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Trigger Background Ingestion
-        # Pass the global vectorstore to ensure we write to the active connection
-        background_tasks.add_task(background_ingest, file_path, retriever.vectorstore)
+        # Passing None for vectorstore, function will access global or create new
+        # Correct approach: Pass the global vectorstore
+        background_tasks.add_task(background_ingest, file_path, vectorstore)
         
         return {"message": f"Upload accepted. Processing {file.filename} in background.", "status": "processing"}
             
@@ -216,15 +256,12 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
 @app.delete("/documents")
 def delete_document(source: str = Query(..., description="The source filename to delete (e.g. report.pdf)")):
     try:
-        # Delete from Chroma
-        # vectorstore.delete expects ids or filter
-        # We delete where metadata['source'] == source
+        if not vectorstore:
+             raise HTTPException(status_code=503, detail="Vectorstore not initialized")
+             
         print(f"Deleting documents with source: {source}")
+        vectorstore._collection.delete(where={"source": source})
         
-        # ChromaDB delete collection call
-        retriever.vectorstore._collection.delete(where={"source": source})
-        
-        # Optional: Delete actual file from disk
         file_path = os.path.join("data/raw_pdfs", source)
         if os.path.exists(file_path):
             os.remove(file_path)
