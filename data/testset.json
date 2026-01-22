@@ -1,0 +1,18 @@
+[
+    {
+        "question": "What is the itinerary for the Vancouver trip?",
+        "ground_truth": "The itinerary covers February 16-19 and includes arrival, hotel check-in, and various planned activities for each day.",
+        "ground_truth_context": [
+            "Vancouver Trip Itinerary details for Feb 16-19"
+        ],
+        "evolution_type": "simple"
+    },
+    {
+        "question": "What is the main topic of the Applied Energy draft?",
+        "ground_truth": "The document discusses applied energy, likely focusing on methodology, experiments, or theoretical analysis related to energy systems.",
+        "ground_truth_context": [
+            "Abstract and introduction of Applied Energy 1st Draft"
+        ],
+        "evolution_type": "simple"
+    }
+]

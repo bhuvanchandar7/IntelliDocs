@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: intellidocs-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist data (Vector DB, Models, PDFs)
+      - ./data:/app/data
+    environment:
+      # Ensure HuggingFace downloads go to the mounted volume
+      - HF_HOME=/app/data/cache
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: intellidocs-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

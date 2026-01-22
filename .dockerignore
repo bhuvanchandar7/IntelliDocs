@@ -1,0 +1,23 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Dependencies
+node_modules
+frontend/node_modules
+
+# Data (Mount this as a volume instead of copying to image)
+data/models
+data/chroma_db
+data/raw_pdfs
+
+# Artifacts
+.DS_Store
+*.log

@@ -33,6 +33,7 @@ ENV/
 # Data
 data/raw_pdfs/
 data/chroma_db/
+data/cache/
 !data/.gitkeep
 
 # Env

@@ -14,4 +14,8 @@ bitsandbytes==0.41.3
 trl==0.7.4
 accelerate==0.25.0
 scipy==1.11.4
-openai==1.6.1
+openai>=1.10.0
+python-multipart==0.0.9
+llama-cpp-python==0.2.23
+ragas==0.1.0
+datasets==2.14.7
