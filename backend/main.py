@@ -1,17 +1,25 @@
 import time
 import os
 import shutil
+import json
+import logging
+import threading
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from backend.schemas import QueryRequest, QueryResponse, DocumentSource, HealthResponse, MetricsResponse, DocumentListResponse, DocumentInfo
-from backend.retriever import get_vector_retriever, get_bm25_retriever, Reranker
+from fastapi.responses import StreamingResponse
 from langchain.retrievers import EnsembleRetriever
 from langchain.docstore.document import Document
+
+from backend.config import settings
+from backend.llm import get_llm
+from backend.schemas import QueryRequest, QueryResponse, DocumentSource, HealthResponse, MetricsResponse, DocumentListResponse, DocumentInfo
+from backend.retriever import get_vector_retriever, get_bm25_retriever, Reranker
 from ingestion.process_pdfs import ingest_single_file
 
-from contextlib import asynccontextmanager
-from fastapi.responses import StreamingResponse
-import json
+# Configure logger
+logger = logging.getLogger("intellidocs")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 # Global Components
 vector_retriever = None
@@ -20,82 +28,85 @@ bm25_retriever = None
 reranker = None
 ensemble_retriever = None
 
+# Global lock for updating the ensemble/BM25 retrievers
+retriever_lock = threading.Lock()
+
+def rebuild_ensemble_retriever():
+    """
+    Thread-safe helper to rebuild the BM25 and Ensemble retrievers
+    whenever documents are ingested or deleted.
+    """
+    global bm25_retriever, ensemble_retriever, vector_retriever, vectorstore
+    
+    logger.info("Rebuilding Ensemble / BM25 Retriever...")
+    with retriever_lock:
+        try:
+            if not vectorstore:
+                logger.warning("Vectorstore is not initialized. Skipping BM25 rebuild.")
+                ensemble_retriever = None
+                return
+
+            # Fetch all docs from Chroma
+            data = vectorstore.get() 
+            all_docs = []
+            if data and data.get('documents'):
+                 for i, text in enumerate(data['documents']):
+                      meta = data['metadatas'][i] if data['metadatas'] else {}
+                      all_docs.append(Document(page_content=text, metadata=meta))
+            
+            if all_docs:
+                bm25_retriever = get_bm25_retriever(all_docs, k=10)
+                # Create Ensemble Retriever
+                ensemble_retriever = EnsembleRetriever(
+                    retrievers=[bm25_retriever, vector_retriever],
+                    weights=[0.5, 0.5] # Equal weight
+                )
+                logger.info(f"BM25 Index rebuilt successfully with {len(all_docs)} documents.")
+            else:
+                logger.warning("No documents found in Vectorstore. BM25 skipped.")
+                bm25_retriever = None
+                ensemble_retriever = vector_retriever # Fallback directly to vector search
+        except Exception as e:
+            logger.error(f"Error rebuilding BM25: {e}", exc_info=True)
+            bm25_retriever = None
+            ensemble_retriever = vector_retriever # Fallback
+
 # Lifespan manager to handle startup/shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global vector_retriever, vectorstore, bm25_retriever, reranker, ensemble_retriever
     
-    print("Initializing Application...")
+    logger.info("Initializing Application...")
     
     # 1. Initialize Vector Store & Retriever
-    print("Initializing Vector Retriever...")
+    logger.info("Initializing Vector Retriever...")
     vector_retriever, vectorstore = get_vector_retriever(k=10) # Fetch more candidates
     
-    # 2. Initialize BM25 (Requires fetching all docs)
-    print("Building BM25 Index (Hybrid Search)...")
-    try:
-        # Fetch all docs from Chroma
-        data = vectorstore.get() 
-        all_docs = []
-        if data['documents']:
-             for i, text in enumerate(data['documents']):
-                  meta = data['metadatas'][i] if data['metadatas'] else {}
-                  all_docs.append(Document(page_content=text, metadata=meta))
-        
-        if all_docs:
-            bm25_retriever = get_bm25_retriever(all_docs, k=10)
-            print(f"BM25 Index built with {len(all_docs)} documents.")
-            
-            # Create Ensemble Retriever
-            ensemble_retriever = EnsembleRetriever(
-                retrievers=[bm25_retriever, vector_retriever],
-                weights=[0.5, 0.5] # Equal weight
-            )
-        else:
-            print("Warning: No documents found. BM25 skipped.")
-            ensemble_retriever = vector_retriever # Fallback
-            
-    except Exception as e:
-        print(f"Error building BM25: {e}")
-        ensemble_retriever = vector_retriever # Fallback
-
+    # 2. Build BM25 (Requires fetching all docs)
+    rebuild_ensemble_retriever()
+    
     # 3. Initialize Reranker
-    print("Loading Reranker Model...")
+    logger.info("Loading Reranker Model...")
     reranker = Reranker()
 
     # 4. Load LLM
-    model_path = "data/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
-    if os.path.exists(model_path):
-        print("Loading LLM model into memory...")
-        from langchain_community.llms import LlamaCpp
-        from langchain.callbacks.manager import CallbackManager
-        from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-
-        callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
-        app.state.llm = LlamaCpp(
-            model_path=model_path,
-            n_gpu_layers=-1,
-            n_batch=512,
-            n_ctx=4096,
-            f16_kv=True,
-            callback_manager=callback_manager,
-            verbose=True,
-            temperature=0.7,
-        )
-        print("LLM Loaded Successfully.")
-    else:
-        print("Warning: LLM model not found. Queries will fail.")
+    try:
+        logger.info("Initializing LLM Model...")
+        app.state.llm = get_llm()
+        logger.info("LLM Loaded Successfully.")
+    except Exception as e:
+        logger.error(f"Warning: Failed to load LLM. Queries may fail: {e}")
         app.state.llm = None
     
     yield
     
-    print("Shutting down...")
+    logger.info("Shutting down...")
 
 app = FastAPI(title="IntelliDocs API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -175,17 +186,18 @@ async def query_documents(request: QueryRequest):
         stats["total_requests"] += 1
         stats["timestamps"].append(time.time())
         
-        print(f"Querying: {request.query}")
+        logger.info(f"Querying: {request.query}")
         
+        if not ensemble_retriever:
+            raise HTTPException(status_code=503, detail="Retrieval system is not initialized.")
+            
         # 1. Retrieval (Hybrid)
-        # Fetch top 10 candidates
         candidates = ensemble_retriever.invoke(request.query)
-        print(f"Retrieved {len(candidates)} candidates.")
+        logger.info(f"Retrieved {len(candidates)} candidates.")
         
         # 2. Reranking
-        # Filter top 5
         docs = reranker.rerank(request.query, candidates, top_k=5)
-        print(f"After Reranking: Keeping {len(docs)} best docs.")
+        logger.info(f"After Reranking: Keeping {len(docs)} best docs.")
 
         # Prepare Context
         context_text = "\n\n".join([doc.page_content for doc in docs])
@@ -200,16 +212,21 @@ async def query_documents(request: QueryRequest):
                 {
                     "content": doc.page_content,
                     "source": doc.metadata.get("source", "unknown"),
-                    # Score might be useful for debug but user doesn't need it
                     "score": doc.metadata.get("score", 0.0)
                 } for doc in docs
             ]
             
             yield json.dumps({"type": "sources", "data": sources}) + "\n"
             
-            for chunk in app.state.llm.stream(prompt):
-                 if chunk:
-                    yield json.dumps({"type": "token", "data": chunk}) + "\n"
+            try:
+                for chunk in app.state.llm.stream(prompt):
+                     # Handle ChatModel chunks (AIMessageChunk) vs standard text strings
+                     text = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                     if text:
+                        yield json.dumps({"type": "token", "data": text}) + "\n"
+            except Exception as stream_err:
+                logger.error(f"Error during streaming: {stream_err}")
+                yield json.dumps({"type": "token", "data": f"\n\n[Error during LLM generation: {stream_err}]"}) + "\n"
             
             process_time = (time.time() - start_time) * 1000
             stats["total_latency_ms"] += process_time
@@ -218,21 +235,20 @@ async def query_documents(request: QueryRequest):
         return StreamingResponse(generate_stream(), media_type="application/x-ndjson")
 
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error handling query: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-def background_ingest(file_path, vectorstore_arg): # vectorstore_arg ignored, using global
+def background_ingest(file_path, vectorstore_arg):
     try:
-        print(f"Starting background ingestion for {file_path}...")
-        # Ignore vectorstore_arg, use global variable
+        logger.info(f"Starting background ingestion for {file_path}...")
         count = ingest_single_file(file_path, vectorstore)
         
-        # TODO: Update BM25 index? 
-        # For now, it won't update until restart. That's a trade-off.
+        # Rebuild retrievers after new file is ingested
+        rebuild_ensemble_retriever()
         
-        print(f"Background ingestion complete. {count} chunks added.")
+        logger.info(f"Background ingestion complete. {count} chunks added.")
     except Exception as e:
-        print(f"Background ingestion failed for {file_path}: {e}")
+        logger.error(f"Background ingestion failed for {file_path}: {e}", exc_info=True)
 
 @app.post("/upload")
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
@@ -244,13 +260,12 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Passing None for vectorstore, function will access global or create new
-        # Correct approach: Pass the global vectorstore
         background_tasks.add_task(background_ingest, file_path, vectorstore)
         
         return {"message": f"Upload accepted. Processing {file.filename} in background.", "status": "processing"}
             
     except Exception as e:
+        logger.error(f"Upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/documents")
@@ -259,18 +274,23 @@ def delete_document(source: str = Query(..., description="The source filename to
         if not vectorstore:
              raise HTTPException(status_code=503, detail="Vectorstore not initialized")
              
-        print(f"Deleting documents with source: {source}")
+        logger.info(f"Deleting documents with source: {source}")
         vectorstore._collection.delete(where={"source": source})
         
         file_path = os.path.join("data/raw_pdfs", source)
         if os.path.exists(file_path):
             os.remove(file_path)
             
+        # Rebuild retrievers after deletion
+        rebuild_ensemble_retriever()
+            
         return {"message": f"Successfully deleted documents for {source}"}
     except Exception as e:
+        logger.error(f"Delete failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=settings.host, port=settings.port)
+
 

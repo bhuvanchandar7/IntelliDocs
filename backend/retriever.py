@@ -3,8 +3,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from langchain.docstore.document import Document
-from chromadb.config import Settings
 from sentence_transformers import CrossEncoder
+from backend.config import settings
 
 class Reranker:
     def __init__(self, model_name="cross-encoder/ms-marco-MiniLM-L-6-v2"):
@@ -46,9 +46,9 @@ def get_vector_retriever(k=5):
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
     vectorstore = Chroma(
-        collection_name="intellidocs_papers",
+        collection_name=settings.chroma_collection_name,
         embedding_function=embeddings,
-        persist_directory="data/chroma_db"
+        persist_directory=settings.chroma_persist_dir
     )
     
     return vectorstore.as_retriever(search_kwargs={"k": k}), vectorstore
@@ -63,4 +63,5 @@ def get_bm25_retriever(documents, k=5):
     retriever = BM25Retriever.from_documents(documents)
     retriever.k = k
     return retriever
+
 

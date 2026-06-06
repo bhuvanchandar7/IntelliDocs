@@ -4,8 +4,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import argparse
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from chromadb.config import Settings
 from langchain.docstore.document import Document
+from backend.config import settings
 
 def extract_text_from_pdf(pdf_path):
     """
@@ -63,9 +63,9 @@ def process_pdfs(input_dir="data/raw_pdfs", chunk_size=512, chunk_overlap=50):
         
         # Initialize Vector Store (Chroma)
         vectorstore = Chroma(
-            collection_name="intellidocs_papers",
+            collection_name=settings.chroma_collection_name,
             embedding_function=embeddings,
-            persist_directory="data/chroma_db"
+            persist_directory=settings.chroma_persist_dir
         )
         
         # Add documents in batches to avoid hitting limits or memory issues
@@ -107,9 +107,9 @@ def ingest_single_file(file_path, vectorstore=None):
                     model_kwargs=model_kwargs
                 )
                 vectorstore = Chroma(
-                    collection_name="intellidocs_papers",
+                    collection_name=settings.chroma_collection_name,
                     embedding_function=embeddings,
-                    persist_directory="data/chroma_db"
+                    persist_directory=settings.chroma_persist_dir
                 )
             
             vectorstore.add_documents(documents=docs)

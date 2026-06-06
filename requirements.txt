@@ -19,3 +19,6 @@ python-multipart==0.0.9
 llama-cpp-python==0.2.23
 ragas==0.1.0
 datasets==2.14.7
+pydantic-settings>=2.1.0
+langchain-openai>=0.0.5
+langchain-google-genai>=0.0.6

@@ -78,7 +78,18 @@ npm install
 cd ..
 ```
 
-### 2. Ingest Data
+### 2. Configure Environment
+Create a `.env` file in the root directory (a default is generated on setup) to choose your LLM provider and provide necessary credentials:
+
+```ini
+# Supported: "dummy" (dev mock mode), "openai", "gemini", "ollama", "local" (GGUF)
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your-openai-api-key
+GEMINI_API_KEY=your-gemini-api-key
+```
+
+### 3. Ingest Data
 Download papers and populate the vector database.
 ```bash
 # Fetches ArXiv papers and processes them
@@ -86,14 +97,14 @@ python ingestion/fetch_papers.py --query "cat:cs.CL" --max_results 5
 python ingestion/process_pdfs.py
 ```
 
-### 3. Launch App (Local Dev)
+### 4. Launch App (Local Dev)
 Starts both the FastAPI backend and React frontend with one command.
 ```bash
 chmod +x start_app.sh
 ./start_app.sh
 ```
 
-### 4. Production Deployment (Docker)
+### 5. Production Deployment (Docker)
 Run the full stack (Backend + Frontend + Nginx) in a containerized environment.
 ```bash
 # 1. Build and Run
